@@ -64,7 +64,7 @@ data <- read.csv("https://raw.githubusercontent.com/joannarashid/predicting_dati
 ```
 ```{r}
 #I could not get line 40 to run. So importing cleaned csv here
-df <- read.csv("https://raw.githubusercontent.com/joannarashid/predicting_dating_match/main/speed_dating_data.csv", header = TRUE)
+df <- read.csv("https://raw.githubusercontent.com/joannarashid/dating_match_prediction/main/speed_dating_data.csv", header = TRUE)
 ```
 
 ## Exploratory Data Analysis
