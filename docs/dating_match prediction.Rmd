@@ -281,36 +281,34 @@ pca_test_pred = ifelse(pca_test_pred > .5,1,0)
 pca_test_err <- mean(pca_test_pred!= pca.testframe$match)
 print(paste0("PCA Regression Testing Error: ", pca_test_err))
 ```
-## PCA
+## Additional PCA with 3 PCs
 ```{r}
-
-
 #new data frame with principal components and response data
-pca.frame = as.data.frame(pca$x[,1:3])
-pca.frame$match = train$match
+pca.frame2 = as.data.frame(pca$x[,1:3])
+pca.frame2$match = train$match
 
 #pca_df <- data.frame(cbind(select_comps, train$match))
 
 #liner model with selected components
-pca_log <- glm(match~., data = pca.frame, family = binomial(link = "logit"))
+pca_log2 <- glm(match~., data = pca.frame2, family = binomial(link = "logit"))
 
-summary(pca_log)
+summary(pca_log2)
 
 #training error
-pca_train_pred <- predict(pca_log, newdata = pca.frame[,-4], type= "response")
-pca_train_pred = ifelse(pca_train_pred > .5,1,0)
-pca_train_err <- mean(pca_train_pred!= train$match)
-print(paste0("PCA Regression Training Error: ", pca_train_err))
+pca_train_pred2 <- predict(pca_log2, newdata = pca.frame2[,-4], type= "response")
+pca_train_pred2 = ifelse(pca_train_pred2 > .5,1,0)
+pca_train_err2 <- mean(pca_train_pred2!= train$match)
+print(paste0("PCA Regression Training Error: ", pca_train_err2))
 
 #testing error
-pcatest = prcomp(test[,names(test)!= "match"])
-pca.testframe = as.data.frame(pcatest$x[,1:3])
-pca.testframe$match = test$match
+pcatest2 = prcomp(test[,names(test)!= "match"])
+pca.testframe2 = as.data.frame(pcatest2$x[,1:3])
+pca.testframe2$match = test$match
 
-pca_test_pred <- predict(pca_log, newdata=pca.testframe[,-4], type = "response");
-pca_test_pred = ifelse(pca_test_pred > .5,1,0)
-pca_test_err <- mean(pca_test_pred!= pca.testframe$match)
-print(paste0("PCA Regression Testing Error: ", pca_test_err))
+pca_test_pred2 <- predict(pca_log2, newdata=pca.testframe2[,-4], type = "response");
+pca_test_pred2 = ifelse(pca_test_pred2 > .5,1,0)
+pca_test_err2 <- mean(pca_test_pred2!= pca.testframe2$match)
+print(paste0("PCA Regression Testing Error: ", pca_test_err2))
 ```
 
 ## Naive Bayes
@@ -438,7 +436,7 @@ print(paste0("Gradient Boosting Test Error: ", gb_test_err))
 
 # Cross Validation
 ```{r}
-B=20;
+B= 100; #change this to 10 or 20 for faster computation while workshopping
 CVALL = NULL
 
 for (i in 1:B) {
@@ -584,39 +582,3 @@ sens_spec_df
 anova(log_model, step_model, test = "Chisq")
 #the full model is statistically significantly better than the stepwise-reduced 
 ```
-
-# Seperate Cross Validation Loop for PCA - to be deleted
-```{r}
-#PCA
-B=20;
-CVALL = NULL
-
-for (i in 1:B) {
-  
-  #randomly the data into training and test
-  finalerror = NULL;
-  flags <- sort(sample(1:n, n1));
-  train <- df[-flags,];
-  test <- df[flags,];
-  test[,-57]
-  pca = prcomp(train[,-57], center = TRUE)#, scale = TRUE)
-  select_comps <- pca$x[,1:15]
-  pca_df <- data.frame(select_comps)
-  pca_df$match = train$match
-  
-  pca_log <- glm(match~., data = pca_df, family = binomial(link = "logit"))
-  
-  pcatest = prcomp(test[,names(test)!= "match"])
-  pca.testframe = as.data.frame(pcatest$x[,1:15])
-  pca.testframe$match = test$match
-
-  pca_test_pred <- predict(pca_log, newdata=pca.testframe[,-16], type = "response");
-  pca_test_pred = ifelse(pca_test_pred > .5,1,0)
-  pca_err <- mean(pca_test_pred!= test$match)
-  
-  cverror_pca <- cbind(log_err, step_err, pca_err, nb_err, lda_err, qda_err, knn_err)
-  CVALL_pca <- rbind(CVALL, cverror)
-  
-}
-```
-
