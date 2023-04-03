@@ -1,0 +1,622 @@
+---
+title: "ISYE 7406 Term Project"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Data
+
+## Data Summary
+Speed Dating Dataset:
+https://www.kaggle.com/datasets/ulrikthygepedersen/speed-dating
+
+Data Description (Kaggle):
+This data was gathered from participants in experimental speed dating events from 2002-2004. During the events, the attendees would have a four-minute "first date" with every other participant of the opposite sex. At the end of their four minutes, participants were asked if they would like to see their date again. They were also asked to rate their date on six attributes: Attractiveness, Sincerity, Intelligence, Fun, Ambition, and Shared Interests. The dataset also includes questionnaire data gathered from participants at different points in the process. These fields include: demographics, dating habits, self-perception across key attributes, beliefs on what others find valuable in a mate, and lifestyle information.
+
+##Libraries and Raw Data
+```{r, set.seed(100), warning = FALSE, message=FALSE}
+#setting seed for entire notebook
+knitr::opts_chunk$set(cache = T)
+
+options(scipen=999)
+
+library(corrplot)
+library(RColorBrewer)
+library(Hmisc)
+library(corrplot)
+library(tidyverse)
+library(class)
+library(e1071)
+library(caret)
+library(factoextra)
+library(randomForest)
+library(gbm)
+library(MASS)
+library(kknn)
+library(car)
+
+data <- read.csv("https://raw.githubusercontent.com/joannarashid/predicting_dating_match/main/speeddating.csv", header = TRUE)
+```
+
+## Data Cleaning
+```{r}
+#df <- data %>% select(-starts_with("d_")) #drops cols starting with d-
+#cols_remove <- c(1, 3, 6, 7, 11, 65, 66) #manually remove other unnecessary cols
+#df <- df[,-cols_remove]
+#df['age_diff'] <- abs(df['age_o'] - df['age']) #add in a diff in age column
+#df <- df[,-c(2,3)] #remove duplicate age cols 
+#Note: we end up with 8378 observations of 59 variables
+
+#Fix cols samerace and match -- change outcomes to 0 or 1
+#df$samerace <- ifelse(df$samerace == "b'0'", 0, 1)
+#df$match <- ifelse(df$match == "b'0'", 0, 1)
+
+#Data appears to have many NA values -- see which cols have NAs
+#colSums(is.na(df)) #expected_num_interested_in_me has 6578 missing vals, so drop column
+#df <- df[,-53] #remaining cols have 14% or less of missing vals 
+
+#Impute missing values with median of the column
+#medians <- apply(df, 2, median, na.rm = TRUE) #get median of each col
+#for (i in colnames(df)){ #impute missing values with median of that col 
+#  df[,i][is.na(df[,i])] <- medians[i]
+#}
+```
+```{r}
+#I could not get line 40 to run. So importing cleaned csv here
+df <- read.csv("https://raw.githubusercontent.com/joannarashid/predicting_dating_match/main/speed_dating_data.csv", header = TRUE)
+```
+
+## Exploratory Data Analysis
+```{r}
+#See datatypes present in dataframe
+str(df) 
+#Notes: all vars are int or num -- no categorical vars -- samerace and match are binary
+
+#View summary stats for all vars 
+summary(df)
+#Notes: people came to the event in 21 waves
+#same race and match are binary - either 0 or 1
+#hobbies were ranked (generally) from a scale of 1-10
+#importance of same race or religion ranked from 1-10
+#attribute importance (e.g. attractive, ambitious, etc.) ranked from 1-100
+#most people have never met their speed dating partner before
+#age_diff ranges from 0-32 with a mean of 3.64 years 
+
+#How many people have not met their speed dating partner before? 
+never_met <- sum(df$met == 0)
+met <- nrow(df) - never_met
+never_met/nrow(df)
+#Notes: Most people (95.7%) have never met their partner before
+
+#How many people ended up matching? 
+matched <- sum(df$match == 1)
+no_match <- sum(df$match == 0)
+matched/nrow(df)
+#Notes: only 16.5% of people matched -- response var outcome is quite skewed 
+
+#Make histogram of all vars -- many vars so do 10 at a time...
+hist.data.frame(df[,1:10])
+hist.data.frame(df[,11:20])
+hist.data.frame(df[,21:30])
+hist.data.frame(df[,31:40])
+hist.data.frame(df[,41:50])
+hist.data.frame(df[,51:58])
+
+hist_plot <- df %>%
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") +
+  geom_histogram(color = "blue")+
+  labs(title = ("Histogram All Variables"))+
+  theme(plot.title = element_text(face = "bold"))
+
+hist_plot
+
+#Notes: most distributions are NOT normally distributed 
+#Only pref_o_sincere, pref_o_intelligence, pref_o_ambitious, sincere_important, 
+#ambition_important, interests_correlate, expected_happy_with_sd_people, and 
+#guess_prob_liked are normally distributed 
+#All others have a left/right skew 
+
+#See correlations between vars 
+cor <- cor(df)
+corrplot(cor, type = "upper", 
+         method = "color", 
+         tl.cex = 0.5, , 
+         order = 'FPC', #ordered by first principal component
+         mar=c(0,0,2,0),
+         title = "Correlation Matrix Ordered by First Principal Component")
+
+#Notes: predictor variables are not very strongly correlated to one another
+#Correlations are in the range of 0-0.6
+
+#View just correlations between match and other var
+cor_match <- cor(df[, colnames(df) != "match"], df$match) 
+cor_match
+#Notes: Most vars are weakly correlated to match (<0.1)
+#attractive_o, sincere_o, intelligence_o, funny_o, ambitious_o, shared_interest_o, attractive_partner, 
+#sincere_partner, intelligence partner, funny_partner, ambition_partner, shared_interests_partner, 
+#and like have relatively stronger correlations (0.15-0.3) but still weak
+
+#Make boxplots of some more strongly correlated vars (> 0.2) 
+boxplot <- df %>%
+  pivot_longer(- c(match)) %>%
+  ggplot(aes(factor(match), value, fill = match)) +
+  geom_boxplot() +
+  facet_wrap(vars(name), scales = "free_y")+
+  labs(title = ("Boxplot All Variables (Sucessful Match = 1)"))+
+  theme(plot.title = element_text(face = "bold"))
+boxplot
+
+#Notes: for all plots, the median of the two groups (match vs no match) are different, 
+#suggesting that these predictors may have a statistically significant relation to match
+
+
+```
+
+## Test and Train sets
+```{r}
+n = dim(df)[1];
+n1 = round(.20*n) #20/80% split
+
+flags <- sort(sample(1:n, n1));
+train <- df[-flags,];
+test <- df[flags,];
+```
+
+# Predictive Modeling
+
+## Logistic Regression
+```{r}
+log_model = glm(match ~ ., data = train, family = binomial(link = "logit"))
+summary(log_model)
+
+#training error
+log_train_pred = predict(log_model, newdata = train[,-57], type = "response")
+log_train_pred = ifelse(log_train_pred > .5,1,0)
+log_train_err <- mean(log_train_pred!= train$match)
+print(paste0("Logistic Regression Training Error: ", log_train_err ))
+
+#testing error
+log_test_pred = predict(log_model, newdata = test[,-57], type = "response")
+log_test_pred = ifelse(log_test_pred > .5,1,0)
+log_test_err <- mean(log_test_pred!= test$match)
+print(paste0("Logistic Regression Testing Error: ", log_test_err))
+```
+```{r}
+# check logistic regression model
+
+#check for multicollinearity
+vif(log_model)
+#several vars are over 5, there is some multicollinearity 
+
+#check model assumptions
+plot(log_model)
+```
+
+## Stepwise Regression
+```{r}
+step_model = step(log_model, trace = FALSE)
+summary(step_model)
+
+#training error
+step_train_pred = predict(step_model, newdata = train[,-57], type = "response");
+step_train_pred = ifelse(step_train_pred > .5,1,0)
+step_train_err <- mean(step_train_pred!= train$match)
+print(paste0("Stepwise Logistic Regression Training Error: ", step_train_err))
+
+#testing error
+step_test_pred = predict(step_model, newdata = test[,-57], type = "response")
+step_test_pred = ifelse(step_test_pred > .5,1,0)
+step_test_err <- mean(step_test_pred!= test$match)
+print(paste0("Stepwise Logistic Regression Testing Error: ", step_test_err))
+
+```
+```{r}
+# check stepwise reduced logistic regression model
+
+#check for multicollinearity
+vif(step_model)
+# stepwise regression improved model. No more multicollinearity 
+
+#check model assumptions
+plot(step_model)
+#tails on qq plot show there is perhaps some overfitting
+```
+## PCA
+```{r}
+#cursory check for multidisciplinary with heatmap
+heatmap(as.matrix(df), Colv = NA, Rowv = NA, scale="column")
+#no high multicolliniearity found
+
+pca = prcomp(train[,-57], center = TRUE)#, scale = TRUE)
+summary(pca)
+
+#scree plot
+fviz_eig(pca, ncp = 15)
+
+#another option for scree plot with red line = 1
+screeplot(pca, main = "Scree Plot of Principal Components", type = "line")
+abline(h=1, col="red")
+
+#scree plot not ideal, so additional proportion of variance plot is needed
+
+#get eigenvalues by squaring the standard deviation 
+var <- pca$sdev^2
+
+#get proportion of variance
+pvar <- var/sum(var)
+plot(pvar, xlab = "Principal Component", ylab = "Proportion of Variance",
+     ylim = c(0,1) , type= "b")
+
+#selecting components 1-3 per scree plot
+#select_comps <- pca$x[,0:15]
+
+#new data frame with principal components and response data
+pca.frame = as.data.frame(pca$x[,1:15])
+pca.frame$match = train$match
+
+#pca_df <- data.frame(cbind(select_comps, train$match))
+
+#liner model with selected components
+pca_log <- glm(match~., data = pca.frame, family = binomial(link = "logit"))
+
+summary(pca_log)
+
+#training error
+pca_train_pred <- predict(pca_log, newdata = pca.frame[,-16], type= "response")
+pca_train_pred = ifelse(pca_train_pred > .5,1,0)
+pca_train_err <- mean(pca_train_pred!= train$match)
+print(paste0("PCA Regression Training Error: ", pca_train_err))
+
+#testing error
+pcatest = prcomp(test[,names(test)!= "match"])
+pca.testframe = as.data.frame(pcatest$x[,1:15])
+pca.testframe$match = test$match
+
+pca_test_pred <- predict(pca_log, newdata=pca.testframe[,-16], type = "response");
+pca_test_pred = ifelse(pca_test_pred > .5,1,0)
+pca_test_err <- mean(pca_test_pred!= pca.testframe$match)
+print(paste0("PCA Regression Testing Error: ", pca_test_err))
+```
+## PCA
+```{r}
+
+
+#new data frame with principal components and response data
+pca.frame = as.data.frame(pca$x[,1:3])
+pca.frame$match = train$match
+
+#pca_df <- data.frame(cbind(select_comps, train$match))
+
+#liner model with selected components
+pca_log <- glm(match~., data = pca.frame, family = binomial(link = "logit"))
+
+summary(pca_log)
+
+#training error
+pca_train_pred <- predict(pca_log, newdata = pca.frame[,-4], type= "response")
+pca_train_pred = ifelse(pca_train_pred > .5,1,0)
+pca_train_err <- mean(pca_train_pred!= train$match)
+print(paste0("PCA Regression Training Error: ", pca_train_err))
+
+#testing error
+pcatest = prcomp(test[,names(test)!= "match"])
+pca.testframe = as.data.frame(pcatest$x[,1:3])
+pca.testframe$match = test$match
+
+pca_test_pred <- predict(pca_log, newdata=pca.testframe[,-4], type = "response");
+pca_test_pred = ifelse(pca_test_pred > .5,1,0)
+pca_test_err <- mean(pca_test_pred!= pca.testframe$match)
+print(paste0("PCA Regression Testing Error: ", pca_test_err))
+```
+
+## Naive Bayes
+```{r}
+nb_model <- naiveBayes(as.factor(match) ~. , data = train)
+
+#training error
+nb_train_err <- mean(predict(nb_model, newdata = train) != train$match)
+print(paste0("Naive Bayes Training Error: ", nb_train_err))
+
+#testing error
+nb_test_pred <- predict(nb_model, newdata = test) != test$match
+nb_test_err <- mean(nb_test_pred != test$match)
+print(paste0("Naive Bayes Testing Error: ", nb_test_err))
+
+```
+
+## Linear Discriminant Analysis
+```{r}
+lda_model <- lda(train[,-57], train$match)
+lda_model
+
+#training error
+lda_train_err <- mean(predict(lda_model, train[,-57])$class != train$match)
+print(paste0("LDA Training Error: ", lda_train_err))
+
+#testing error
+lda_test_pred <- predict(lda_model, test[,-57])$class
+lda_test_err <- mean(lda_test_pred != test$match)
+print(paste0("LDA Training Error: ", lda_test_err))
+```
+
+## Quadratic Discriminant Analysis
+```{r}
+qda_model <- qda(train[,-57], train[,57]);
+qda_model
+
+#training error
+qda_train_err <- mean(predict(qda_model, train[,-57])$class != train$match)
+print(paste0("LDA Training Error: ", qda_train_err))
+
+#testing error
+qda_test_pred <- predict(qda_model, test[,-57])$class != test$match
+qda_test_err <- mean(predict(qda_model, test[,-57])$class != test$match)
+print(paste0("LDA Test Error: ", qda_test_err))
+```
+## KNN
+```{r}
+#find ideal value for k
+loocv_model = train.kknn(match ~ .,
+                   train,
+                   ks=(1:35),
+                   kernel = "optimal",
+                   scale=TRUE) #scales the data
+
+plot(loocv_model, main ="Values of K for KNN Model")
+
+# k = 26 has the lowest MSE
+```
+
+```{r}
+knn_model <- kknn(match~ .,
+             train = train,
+             test = test,
+             k =  26,
+             kernel = "optimal",
+             scale = TRUE)
+
+## Testing Error
+knn_pred <- predict(knn_model)
+knn_pred = ifelse(knn_pred > .5,1,0)
+knn_test_err <- mean(knn_pred != test$match)
+print(paste0("KNN Test Error: ", knn_test_err))
+
+knn_train_err = "NA"
+```
+
+## Random Forest
+```{r}
+rf_model <- randomForest(as.factor(match) ~.,
+                   data = train, 
+                   ntree = 500,
+                   mtry = 8, #p = 58, default mtry is sqrt(p) = approx. 8
+                   nodesize = 2, # response values are either 0 or 1
+                   importance = TRUE)
+
+rf.pred = predict(rf_model, test, type="class")
+
+confusionMatrix(data=factor(rf.pred), reference = factor(test$match))
+
+varImpPlot(rf_model)
+
+rf_test_err <- mean(rf.pred != test$match)
+rf_train_error <- "NA"
+
+print(paste0("Random Forest Test Error: ", rf_test_err))
+```
+
+## Gradient Boosting
+```{r}
+gb_model <- gbm(match~ .,
+                data = train,
+                distribution = 'bernoulli',
+                n.trees = 3000, 
+                shrinkage = 0.01, 
+                interaction.depth = 3, 
+                cv.folds = 10)
+
+perf_gbm1 = gbm.perf(gb_model, method="cv") 
+perf_gbm1 # = 2904
+
+#training error
+gb_pred <- predict(gb_model,newdata = train, n.trees=perf_gbm1, type="response")
+gb_pred[1:10]
+yhat <- ifelse(gb_pred < 0.5, 0, 1)
+yhat[1:10]
+gb_train_err <- sum(yhat != train$match)/length(train$match)
+print(paste0("Gradient Boosting Training Error: ", gb_train_err))
+
+#testing error
+gb_test_pred <- ifelse(predict(gb_model,newdata = test[,-57], n.trees=perf_gbm1, type="response") < 0.5, 0, 1)
+gb_test_err <- mean(gb_test_pred != test$match) 
+print(paste0("Gradient Boosting Test Error: ", gb_test_err))
+```
+
+# Cross Validation
+```{r}
+B=20;
+CVALL = NULL
+
+for (i in 1:B) {
+  
+  #randomly the data into training and test
+  finalerror = NULL;
+  flags <- sort(sample(1:n, n1));
+  train <- df[-flags,];
+  test <- df[flags,];
+  test[,-57]
+  
+  #Full Log Regression 
+  log_model = glm(match ~ ., data = train, family= binomial(link = "logit"))
+  log_test_pred = predict(log_model, newdata = test[,-57], type = "response")
+  log_test_pred = ifelse(log_test_pred > .5,1,0)
+  log_err <- mean(log_test_pred!= test$match)
+
+  #log regression with step
+  step_model = step(log_model, trace = FALSE)
+  step_test_pred = predict(step_model, newdata = test[,-57], type = "response")
+  step_test_pred = ifelse(step_test_pred > .5,1,0)
+  step_err <- mean(step_test_pred!= test$match)
+  
+  #PCA
+  pca = prcomp(train[,-57], center = TRUE)#, scale = TRUE)
+  select_comps <- pca$x[,1:15]
+  pca_df <- data.frame(select_comps)
+  pca_df$match = train$match
+  
+  pca_log <- glm(match~., data = pca_df, family = binomial(link = "logit"))
+  
+  pcatest = prcomp(test[,names(test)!= "match"])
+  pca.testframe = as.data.frame(pcatest$x[,1:15])
+  pca.testframe$match = test$match
+
+  pca_test_pred <- predict(pca_log, newdata=pca.testframe[,-16], type = "response");
+  pca_test_pred = ifelse(pca_test_pred > .5,1,0)
+  pca_err <- mean(pca_test_pred!= test$match)
+  
+  #Naive Bayes
+  nb_model <- naiveBayes(as.factor(match) ~. , data = train)
+  nb_err <- mean(predict(nb_model, newdata = test) != test$match)
+  
+  #LDA
+  lda_model <- lda(train[,-57], train$match)
+  lda_err <- mean(predict(lda_model, test[,-57])$class != test$match)
+  
+  #QDA
+  qda_model <- qda(train[,-57], train[,57])
+  qda_err <- mean(predict(qda_model, test[,-57])$class != test$match)
+  
+  #KNN
+  knn_model <- kknn(match~ .,
+             train = train,
+             test = test,
+             k =  26,
+             kernel = "optimal",
+             scale = TRUE)
+  knn_pred <- predict(knn_model)
+  knn_pred = ifelse(knn_pred > .5,1,0)
+  knn_err <- mean(knn_pred != test$match)
+  
+  cverror <- cbind(log_err, step_err, pca_err, nb_err, lda_err, qda_err, knn_err)
+  CVALL <- rbind(CVALL, cverror)
+}
+
+colnames(CVALL) <- c("Logistic Regression", "Stepwise Logistic Regression", "PCA Log. Regression 15 PCs", "Naive Bayes", "LDA", "QDA", "KNN")
+
+```
+
+# Performance
+```{r}
+#Train, Test, CV Error and Variance
+Model <- c("Logistic Regression", "Stepwise Logistic Regression", "PCA Log. Regression with 15 PCs", "Naive Bayes", "LDA", "QDA", "KNN k = 26", "Random Forest", "Gradient Boosted")
+
+CVerr <- apply(CVALL, 2, mean)
+CVerr <- c(CVerr, "NA", "NA")
+CVvar <- apply(CVALL, 2, var)
+CVvar <- c(CVvar, "NA", "NA")
+TrainErr <- c(log_train_err, step_train_err, pca_train_err, nb_train_err, lda_train_err, qda_train_err, knn_train_err, rf_train_error, gb_train_err)
+TestErr <- c(log_test_err, step_test_err, pca_test_err, nb_test_err, lda_test_err, qda_test_err, knn_test_err, rf_test_err, gb_test_err)
+
+all_errors_df <- data_frame(Model, TrainErr, TestErr, CVerr, CVvar)
+
+colnames(all_errors_df)[2] ="Training Error"
+colnames(all_errors_df)[3] ="Test Error"
+colnames(all_errors_df)[4] ="Cross Validation Error"
+colnames(all_errors_df)[5] ="Cross Validation Variance"
+
+all_errors_df
+```
+## Specificity and Sensitivity
+```{r}
+#confusion matrix logistic regression
+log_conf <- confusionMatrix(data = factor(log_test_pred), reference = factor(test$match))
+
+#confusion matrix step-wise logistic regression
+step_conf <- confusionMatrix(data = factor(step_test_pred), reference = factor(test$match))
+
+#confusion matrix PCA Log. Regression with 15 PCs
+pca_conf <- confusionMatrix(data = factor(pca_test_pred), reference = factor(test$match))
+
+#confusion matrix Naive Bayes logistic regression
+nb_test_pred <- as.integer(as.logical(nb_test_pred))
+nb_conf <- confusionMatrix(data = factor(nb_test_pred), reference = factor(test$match))
+
+#confusion matrix LDA
+lda_conf <- confusionMatrix(data = factor(lda_test_pred), reference = factor(test$match))
+
+#confusion matrix QDA logistic regression
+qda_test_pred <- as.integer(as.logical(qda_test_pred))
+qda_conf <- confusionMatrix(data = factor(qda_test_pred), reference = factor(test$match))
+
+#confusion matrix gradient boosted logistic regression
+gb_conf <- confusionMatrix(data = factor(gb_test_pred), reference = factor(test$match))
+                           
+#confusion matrix Random forest
+rf_conf <- confusionMatrix(data = factor(rf.pred), reference = factor(test$match))
+
+#KNN confusion matrix
+knn_conf <- confusionMatrix(data = factor(knn_pred), reference = factor(test$match))
+
+sensitivity <- c(log_conf$byClass[1], step_conf$byClass[1], pca_conf$byClass[1],
+                 nb_conf$byClass[1], lda_conf$byClass[1], qda_conf$byClass[1], 
+                 knn_conf$byClass[1], rf_conf$byClass[1], gb_conf$byClass[1])
+                  
+specificity <- c(log_conf$byClass[2], step_conf$byClass[2], pca_conf$byClass[2],
+                 nb_conf$byClass[2], lda_conf$byClass[2], qda_conf$byClass[2], 
+                 knn_conf$byClass[2], rf_conf$byClass[2], gb_conf$byClass[2])
+
+
+sens_spec_df <- data_frame(Model, sensitivity, specificity)
+
+colnames(sens_spec_df)[1] ="Model"
+colnames(sens_spec_df)[2] ="Sensitivity"
+colnames(sens_spec_df)[3] ="Specificity"
+
+sens_spec_df
+```
+## Chi-Sq test of Logistic Regression Models
+```{r}
+#Chi-Sq test to compare Logistic Regression model full vs. stepwise reduced
+anova(log_model, step_model, test = "Chisq")
+#the full model is statistically significantly better than the stepwise-reduced 
+```
+
+# Seperate Cross Validation Loop for PCA - to be deleted
+```{r}
+#PCA
+B=20;
+CVALL = NULL
+
+for (i in 1:B) {
+  
+  #randomly the data into training and test
+  finalerror = NULL;
+  flags <- sort(sample(1:n, n1));
+  train <- df[-flags,];
+  test <- df[flags,];
+  test[,-57]
+  pca = prcomp(train[,-57], center = TRUE)#, scale = TRUE)
+  select_comps <- pca$x[,1:15]
+  pca_df <- data.frame(select_comps)
+  pca_df$match = train$match
+  
+  pca_log <- glm(match~., data = pca_df, family = binomial(link = "logit"))
+  
+  pcatest = prcomp(test[,names(test)!= "match"])
+  pca.testframe = as.data.frame(pcatest$x[,1:15])
+  pca.testframe$match = test$match
+
+  pca_test_pred <- predict(pca_log, newdata=pca.testframe[,-16], type = "response");
+  pca_test_pred = ifelse(pca_test_pred > .5,1,0)
+  pca_err <- mean(pca_test_pred!= test$match)
+  
+  cverror_pca <- cbind(log_err, step_err, pca_err, nb_err, lda_err, qda_err, knn_err)
+  CVALL_pca <- rbind(CVALL, cverror)
+  
+}
+```
+
